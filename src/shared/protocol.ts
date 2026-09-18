@@ -35,7 +35,7 @@ export interface AgentContext {
 }
 export interface WebviewState {
   runtime: { state: RuntimeState; message?: string; version?: string }; sessions: SessionSummary[]; commands: HarnessCommand[]
-  activeSessionId?: string; events: HarnessEvent[]; historyLoading: boolean; trajectoryEvents: Record<string, unknown>[]; plugins: PluginInfo[]; attachedFiles: string[]; settings: SettingsState; gitChanges: { path: string; status: string }[]
+  activeSessionId?: string; events: HarnessEvent[]; historyLoading: boolean; historyHasMore: boolean; historyLoadingMore: boolean; trajectoryEvents: Record<string, unknown>[]; plugins: PluginInfo[]; attachedFiles: string[]; settings: SettingsState; gitChanges: { path: string; status: string }[]
 }
 export type WebviewToExtensionMessage =
   | { type: 'ready' } | { type: 'newSession' } | { type: 'forkSession' } | { type: 'exportSession' } | { type: 'deleteSession' } | { type: 'selectSession'; sessionId: string } | { type: 'renameSession'; sessionId: string }
@@ -49,6 +49,7 @@ export type WebviewToExtensionMessage =
   | { type: 'keepDiff'; callId: string } | { type: 'revertDiff'; callId: string }
   | { type: 'approval'; sessionId: string; approvalId: string; decision: 'allowed-once' | 'rejected' }
   | { type: 'refreshSettings' }
+  | { type: 'loadMoreHistory' }
   | { type: 'saveSettings'; provider: string; model: string; endpoint: string; permissionMode: PermissionMode; apiKey?: string }
   | { type: 'removeApiKey' }
 export type ExtensionToWebviewMessage =

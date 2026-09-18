@@ -10,9 +10,25 @@ import type { HarnessAdapter } from '../harness/HarnessAdapter.ts'
 import { HarnessRuntimeManager } from '../runtime/HarnessRuntimeManager.ts'
 import type { HarnessCommand, HarnessEvent, PluginInfo, SessionSummary, SettingsState, WebviewState, WebviewToExtensionMessage } from '../shared/protocol.ts'
 
+interface FileSnapshot {
+  path: string
+  sessionId: string
+  before?: string
+  after?: string
+  decision?: 'kept' | 'reverted'
+  /** Hydrated snapshots stay lazy: their content is read from these files only when a diff is actually opened. */
+  files?: { before?: string; after?: string }
+}
+
 const SESSION_KEY = 'deepseekHarness.sessions.v2'
 const FILE_CHANGE_KEY = 'deepseekHarness.fileChanges.v1'
 const MAX_PRESENTATION_EVENTS = 5_000
+const HISTORY_PAGE_SIZE = 200
+const MAX_FILE_SNAPSHOTS = 200
+const MAX_PERSISTED_CHANGES = 500
+const MAX_TEXT_SNAPSHOT_BYTES = 2 * 1024 * 1024
+const STATE_FLUSH_DELAY_MS = 120
+const GIT_REFRESH_DELAY_MS = 1_000
 const execFileAsync = promisify(execFile)
 interface PersistedFileChange { callId: string; sessionId: string; path: string; beforeFile?: string; afterFile?: string; decision?: 'kept' | 'reverted' }
 
@@ -26,12 +42,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private activeSessionId: string | undefined
   private events: HarnessEvent[] = []
   private historyLoading = false
+  private historyHasMore = false
+  private historyLoadingMore = false
+  private historyAnchor: number | undefined
   private subscription: vscode.Disposable | undefined
+  private stateFlushTimer: ReturnType<typeof setTimeout> | undefined
+  private gitRefreshTimer: ReturnType<typeof setTimeout> | undefined
+  private readonly watchers: vscode.Disposable[] = []
   private activationGeneration = 0
   private settings: SettingsState
   private gitChanges: { path: string; status: string }[] = []
   private trajectoryEvents: Record<string, unknown>[] = []
-  private readonly fileSnapshots = new Map<string, { path: string; before?: string; after?: string; sessionId: string; decision?: 'kept' | 'reverted' }>()
+  private readonly fileSnapshots = new Map<string, FileSnapshot>()
   private persistedChanges: PersistedFileChange[]
 
   constructor(private readonly context: vscode.ExtensionContext, private readonly runtime: HarnessRuntimeManager) {
@@ -52,6 +74,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     view.webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview')] }
     view.webview.html = this.html(view.webview)
     view.webview.onDidReceiveMessage((message: WebviewToExtensionMessage) => { void this.handle(message) }, undefined, this.context.subscriptions)
+    this.installGitWatcher()
     void this.activateStoredSession().catch(error => this.report(error))
   }
 
@@ -61,6 +84,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     this.sessions = [summary, ...this.sessions.filter(item => item.id !== session.id)]
     this.activeSessionId = session.id
     this.events = [{ type: 'session.started', sessionId: session.id }]
+    this.historyHasMore = false
+    this.historyAnchor = undefined
     this.subscribe(adapter, session.id)
     await this.persist(); await this.postState()
   }
@@ -101,7 +126,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     await this.postState(); this.view?.show(true)
   }
 
-  dispose(): void { this.subscription?.dispose() }
+  dispose(): void {
+    this.subscription?.dispose()
+    this.watchers.forEach(watcher => watcher.dispose())
+    if (this.stateFlushTimer !== undefined) clearTimeout(this.stateFlushTimer)
+    if (this.gitRefreshTimer !== undefined) clearTimeout(this.gitRefreshTimer)
+  }
 
   private async handle(message: WebviewToExtensionMessage): Promise<void> {
     try {
@@ -131,6 +161,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         case 'keepDiff': await this.reviewDiff(message.callId, 'kept'); return
         case 'revertDiff': await this.reviewDiff(message.callId, 'reverted'); return
         case 'refreshSettings': await this.refreshSettings(); return
+        case 'loadMoreHistory': await this.loadMoreHistory(); return
         case 'saveSettings': await this.saveSettings(message); return
         case 'removeApiKey': await this.removeApiKey(); return
       }
@@ -199,14 +230,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async openDiff(callId: string): Promise<void> {
     const change = this.fileSnapshots.get(callId)
-    if (change === undefined || change.after === undefined) throw new Error('Diff is no longer available')
+    if (change === undefined) throw new Error('Diff is no longer available')
+    const before = await this.readSnapshotSide(change, 'before'), after = await this.readSnapshotSide(change, 'after')
+    if (after === undefined) throw new Error('Diff is no longer available')
     const root = this.context.storageUri ?? vscode.Uri.file(path.join(this.context.extensionPath, '.dsh-diffs'))
     await vscode.workspace.fs.createDirectory(root)
     const safe = callId.replaceAll(/[^a-zA-Z0-9_-]/g, '_')
     const beforeUri = vscode.Uri.joinPath(root, `${safe}.before`), afterUri = vscode.Uri.joinPath(root, `${safe}.after`)
-    await vscode.workspace.fs.writeFile(beforeUri, Buffer.from(change.before ?? '', 'utf8'))
-    await vscode.workspace.fs.writeFile(afterUri, Buffer.from(change.after, 'utf8'))
+    await vscode.workspace.fs.writeFile(beforeUri, Buffer.from(before ?? '', 'utf8'))
+    await vscode.workspace.fs.writeFile(afterUri, Buffer.from(after, 'utf8'))
     await vscode.commands.executeCommand('vscode.diff', beforeUri, afterUri, `${path.basename(change.path)} (DeepSeek change)`)
+  }
+
+  private async readSnapshotSide(change: FileSnapshot, side: 'before' | 'after'): Promise<string | undefined> {
+    const cached = side === 'before' ? change.before : change.after
+    if (cached !== undefined) return cached
+    const file = change.files?.[side]
+    if (file === undefined) return undefined
+    return await fs.readFile(file, 'utf8').catch(() => undefined)
   }
 
   private async openGitDiff(): Promise<void> {
@@ -228,11 +269,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
 
   private async reviewDiff(callId: string, decision: 'kept' | 'reverted'): Promise<void> {
     const change = this.fileSnapshots.get(callId)
-    if (change === undefined || change.after === undefined) throw new Error('Diff is no longer available')
+    if (change === undefined || await this.readSnapshotSide(change, 'after') === undefined) throw new Error('Diff is no longer available')
     try { await (await this.runtime.start()).reviewChange(callId, decision) } catch { /* older runtime: use the extension snapshot below */ }
     if (decision === 'reverted') {
-      if (change.before === undefined) await vscode.workspace.fs.delete(vscode.Uri.file(change.path), { useTrash: false })
-      else await vscode.workspace.fs.writeFile(vscode.Uri.file(change.path), Buffer.from(change.before, 'utf8'))
+      const before = await this.readSnapshotSide(change, 'before')
+      // Reverting a file the agent created would otherwise delete it outright — the trash keeps that recoverable.
+      if (before === undefined) await vscode.workspace.fs.delete(vscode.Uri.file(change.path), { useTrash: true })
+      else await vscode.workspace.fs.writeFile(vscode.Uri.file(change.path), Buffer.from(before, 'utf8'))
     }
     change.decision = decision
     await this.persistFileChange(callId)
@@ -257,7 +300,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     // index, rather than making those two RPCs serial.
     const preferredId = this.activeSessionId
     const preferredDataTask = preferredId === undefined ? undefined : Promise.all([
-      adapter.history(preferredId),
+      adapter.history(preferredId, { limit: HISTORY_PAGE_SIZE }),
       adapter.pendingApprovals(preferredId),
       adapter.sessionStatus(preferredId),
     ])
@@ -274,9 +317,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     }
     const [historyPage, pending, status] = id === preferredId && preferredDataTask !== undefined
       ? await preferredDataTask
-      : await Promise.all([adapter.history(id), adapter.pendingApprovals(id), adapter.sessionStatus(id)])
+      : await Promise.all([adapter.history(id, { limit: HISTORY_PAGE_SIZE }), adapter.pendingApprovals(id), adapter.sessionStatus(id)])
     if (generation !== this.activationGeneration) return
     const history = historyPage.events
+    // Only the newest page travels on activate; older turns stay fetchable through the "load earlier" affordance.
+    this.historyHasMore = historyPage.hasMore
+    this.historyAnchor = historyPage.firstSeq
     const resolved = new Set(history.flatMap(event => event.type === 'approval.resolved' ? [event.approvalId] : []))
     const known = new Set(history.flatMap(event => event.type === 'approval.requested' ? [event.approvalId] : []))
     this.events = [...history, ...pending.filter(event => event.type === 'approval.requested' && !known.has(event.approvalId) && !resolved.has(event.approvalId)), { type: 'status.changed', sessionId: id, status }]
@@ -285,10 +331,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     await settingsTask; await this.persist(); await this.postState()
     void this.hydrateChangesAfterFirstPaint(id, generation)
     void this.refreshGitChanges()
+    void this.loadCommands(adapter, generation)
   }
 
   private async hydrateChangesAfterFirstPaint(sessionId: string, generation: number): Promise<void> {
-    await this.hydrateFileChanges(sessionId)
+    this.hydrateFileChanges(sessionId)
     if (generation !== this.activationGeneration || sessionId !== this.activeSessionId) return
     const changes = this.persistedChanges.filter(change => change.sessionId === sessionId && this.fileSnapshots.has(change.callId))
     if (changes.length === 0) return
@@ -306,7 +353,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (event.type === 'session.title') {
       const session = this.sessions.find(item => item.id === event.sessionId)
       if (session !== undefined) session.title = event.title
-      void this.persist(); void this.postState(); return
+      void this.persist(); this.scheduleState(); return
     }
     if (event.type === 'tool.started') void this.captureFileBefore(event)
     if (event.type === 'tool.completed') void this.captureFileAfter(event)
@@ -318,8 +365,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private async captureFileBefore(event: Extract<HarnessEvent, { type: 'tool.started' }>): Promise<void> {
     const target = filePathFromArguments(event.arguments)
     if (target === undefined || !isInsideWorkspace(target)) return
-    try { this.fileSnapshots.set(event.callId, { path: target, sessionId: event.sessionId, before: await fs.readFile(target, 'utf8') }) }
-    catch { this.fileSnapshots.set(event.callId, { path: target, sessionId: event.sessionId }) }
+    const before = await this.readTextSnapshot(target)
+    this.trackSnapshot(event.callId, { path: target, sessionId: event.sessionId, ...(before === undefined ? {} : { before }) })
     await this.persistFileChange(event.callId)
   }
 
@@ -327,10 +374,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     const current = this.fileSnapshots.get(event.callId)
     if (current === undefined) return
     try {
-      current.after = await fs.readFile(current.path, 'utf8')
+      const after = await this.readTextSnapshot(current.path)
+      if (after === undefined) { this.fileSnapshots.delete(event.callId); return }
+      current.after = after
       await this.persistFileChange(event.callId)
       if (current.before !== current.after) this.append({ type: 'file.changed', sessionId: event.sessionId, callId: event.callId, path: current.path })
     } catch { /* created/deleted files are handled in a later pass */ }
+  }
+
+  /** Snapshots hold whole file contents, so oversized and binary targets are skipped rather than buffered into memory. */
+  private async readTextSnapshot(target: string): Promise<string | undefined> {
+    const stat = await fs.stat(target).catch(() => undefined)
+    if (stat === undefined || !stat.isFile() || stat.size > MAX_TEXT_SNAPSHOT_BYTES) return undefined
+    if (stat.size === 0) return ''
+    const handle = await fs.open(target, 'r')
+    try {
+      const probe = Buffer.alloc(Math.min(stat.size, 8 * 1024))
+      const { bytesRead } = await handle.read(probe, 0, probe.length, 0)
+      if (probe.subarray(0, bytesRead).includes(0)) return undefined
+    } finally { await handle.close() }
+    return await fs.readFile(target, 'utf8')
+  }
+
+  /** Snapshots grow with every write tool call; keep a bounded window and prefer to evict ones from inactive sessions. */
+  private trackSnapshot(callId: string, entry: FileSnapshot): void {
+    this.fileSnapshots.set(callId, entry)
+    if (this.fileSnapshots.size <= MAX_FILE_SNAPSHOTS) return
+    for (const key of this.fileSnapshots.keys()) {
+      if (this.fileSnapshots.size <= MAX_FILE_SNAPSHOTS) return
+      if (key === callId || this.fileSnapshots.get(key)?.sessionId === this.activeSessionId) continue
+      this.fileSnapshots.delete(key)
+    }
+    const excess = this.fileSnapshots.size - MAX_FILE_SNAPSHOTS
+    if (excess <= 0) return
+    [...this.fileSnapshots.keys()].slice(0, excess).forEach(key => this.fileSnapshots.delete(key))
   }
 
   private async persistFileChange(callId: string): Promise<void> {
@@ -344,17 +421,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     if (beforeFile !== undefined) await fs.writeFile(beforeFile, change.before ?? '', 'utf8')
     if (afterFile !== undefined) await fs.writeFile(afterFile, change.after ?? '', 'utf8')
     const entry: PersistedFileChange = { callId, sessionId: change.sessionId, path: change.path, ...(beforeFile === undefined ? {} : { beforeFile }), ...(afterFile === undefined ? {} : { afterFile }), ...(change.decision === undefined ? {} : { decision: change.decision }) }
-    this.persistedChanges = [...this.persistedChanges.filter(item => item.callId !== callId), entry]
+    // The persisted list is rewritten wholesale, so keep it bounded — otherwise every tool call pays an ever-growing write.
+    this.persistedChanges = [...this.persistedChanges.filter(item => item.callId !== callId), entry].slice(-MAX_PERSISTED_CHANGES)
     await this.context.globalState.update(FILE_CHANGE_KEY, this.persistedChanges)
   }
 
-  private async hydrateFileChanges(sessionId: string): Promise<void> {
+  /** Only metadata is restored here; file contents stay on disk until the user opens a diff. */
+  private hydrateFileChanges(sessionId: string): void {
     for (const item of this.persistedChanges.filter(change => change.sessionId === sessionId)) {
-      try {
-        const before = item.beforeFile === undefined ? undefined : await fs.readFile(item.beforeFile, 'utf8')
-        const after = item.afterFile === undefined ? undefined : await fs.readFile(item.afterFile, 'utf8')
-        this.fileSnapshots.set(item.callId, { path: item.path, sessionId, before, after, ...(item.decision === undefined ? {} : { decision: item.decision }) })
-      } catch { /* stale snapshots are ignored */ }
+      const before = item.beforeFile, after = item.afterFile
+      this.trackSnapshot(item.callId, {
+        path: item.path, sessionId,
+        ...(before === undefined && after === undefined ? {} : { files: { ...(before === undefined ? {} : { before }), ...(after === undefined ? {} : { after }) } }),
+        ...(item.decision === undefined ? {} : { decision: item.decision }),
+      })
     }
   }
 
@@ -403,12 +483,69 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
   private persist(): Thenable<void> { return this.context.globalState.update(SESSION_KEY, this.sessions) }
 
   private postState(): Thenable<boolean> | undefined {
+    if (this.stateFlushTimer !== undefined) { clearTimeout(this.stateFlushTimer); this.stateFlushTimer = undefined }
+    return this.sendState()
+  }
+
+  /**
+   * Streaming a turn replays several fields per second, and each state frame carries the whole transcript. Coalescing them
+   * into a single frame keeps the bridge from serializing that transcript once per chunk.
+   */
+  private scheduleState(): void {
+    if (this.stateFlushTimer !== undefined) return
+    this.stateFlushTimer = setTimeout(() => { this.stateFlushTimer = undefined; void this.sendState() }, STATE_FLUSH_DELAY_MS)
+  }
+
+  private sendState(): Thenable<boolean> | undefined {
     const state: WebviewState = {
       runtime: this.runtime.getStatus(), sessions: this.sessions, commands: this.commands, plugins: this.plugins,
       ...(this.activeSessionId === undefined ? {} : { activeSessionId: this.activeSessionId }),
-      events: this.events, historyLoading: this.historyLoading, trajectoryEvents: this.trajectoryEvents, attachedFiles: this.contextBridge.attachedFiles, settings: this.settings, gitChanges: this.gitChanges,
+      events: this.events, historyLoading: this.historyLoading, historyHasMore: this.historyHasMore, historyLoadingMore: this.historyLoadingMore,
+      trajectoryEvents: this.trajectoryEvents, attachedFiles: this.contextBridge.attachedFiles, settings: this.settings, gitChanges: this.gitChanges,
     }
     return this.view?.webview.postMessage({ type: 'state', state })
+  }
+
+  private async loadMoreHistory(): Promise<void> {
+    const id = this.activeSessionId
+    if (id === undefined || !this.historyHasMore || this.historyLoadingMore || this.historyAnchor === undefined) return
+    this.historyLoadingMore = true
+    await this.postState()
+    try {
+      const page = await (await this.runtime.start()).history(id, { limit: HISTORY_PAGE_SIZE, before: this.historyAnchor })
+      if (id !== this.activeSessionId) return
+      const seen = new Set(page.events.flatMap(event => event.eventSeq === undefined ? [] : [event.eventSeq]))
+      const retained = this.events.filter(event => event.eventSeq === undefined || !seen.has(event.eventSeq))
+      this.events = [...page.events, ...retained]
+      this.historyHasMore = page.hasMore
+      this.historyAnchor = page.firstSeq
+      if (this.events.length > MAX_PRESENTATION_EVENTS) this.events.splice(0, this.events.length - MAX_PRESENTATION_EVENTS)
+    } finally {
+      this.historyLoadingMore = false
+      await this.postState()
+    }
+  }
+
+  private async loadCommands(adapter: HarnessAdapter, generation: number): Promise<void> {
+    try {
+      const commands = await adapter.listCommands()
+      if (generation !== this.activationGeneration) return
+      this.commands = commands
+      await this.postState()
+    } catch { /* slash commands are an optional runtime capability */ }
+  }
+
+  /** Git status is the source of truth for changed files, so keep it fresh while the agent edits the tree. */
+  private installGitWatcher(): void {
+    if (this.watchers.length > 0) return
+    const root = vscode.workspace.workspaceFolders?.[0]
+    if (root === undefined) return
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, '**/*'))
+    const schedule = (): void => {
+      if (this.gitRefreshTimer !== undefined) clearTimeout(this.gitRefreshTimer)
+      this.gitRefreshTimer = setTimeout(() => { this.gitRefreshTimer = undefined; void this.refreshGitChanges() }, GIT_REFRESH_DELAY_MS)
+    }
+    this.watchers.push(watcher.onDidChange(schedule), watcher.onDidCreate(schedule), watcher.onDidDelete(schedule), watcher)
   }
 
   private async refreshGitChanges(): Promise<void> {
@@ -420,7 +557,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
         const status = line.slice(0, 2).trim() || '?', file = line.slice(3).trim()
         return file === '' ? [] : [{ path: path.isAbsolute(file) ? file : path.join(cwd, file), status }]
       })
-      await this.postState()
+      this.scheduleState()
     } catch { this.gitChanges = [] }
   }
 
@@ -446,6 +583,14 @@ function filePathFromArguments(raw: string): string | undefined {
 }
 
 function isInsideWorkspace(target: string): boolean {
-  const roots = (vscode.workspace.workspaceFolders ?? []).map(folder => path.resolve(folder.uri.fsPath))
-  return roots.some(root => target === root || target.startsWith(`${root}${path.sep}`))
+  const folders = vscode.workspace.workspaceFolders ?? []
+  if (folders.length === 0) return false
+  // Case sensitivity is a filesystem property, so compare the way the current platform resolves paths.
+  const insensitive = process.platform === 'darwin' || process.platform === 'win32'
+  const normalize = (value: string): string => insensitive ? path.resolve(value).toLowerCase() : path.resolve(value)
+  const candidate = normalize(target)
+  return folders.some(folder => {
+    const relative = path.relative(normalize(folder.uri.fsPath), candidate)
+    return relative === '' || (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  })
 }

@@ -29,7 +29,9 @@ DeepSeek Harness 的 VS Code 客户端。它把 Harness Web 界面以紧凑的�
 
 - **侧边栏聊天**：在 VS Code Activity Bar 中打开 DeepSeek 图标即可进入 Chat 视图。
 - **会话管理**：新建会话、恢复历史会话、Fork 会话（含分支标记与恢复）。
-- **增量渲染**：流式输出 assistant 内容，实时展示推理过程与工具调用/结果。
+- **增量渲染**：流式输出 assistant 内容，实时展示推理过程与工具调用/结果，推理过程以可折叠的 Thought process 区块呈现。
+- **插件市场**：浏览运行时内嵌的 Harness 插件目录，支持按类别筛选与关键词搜索，实时展示插件激活状态。
+- **轨迹回放**：按回合与步骤回放完整执行轨迹（模型步骤、工具调用、耗时），支持一键导出。
 - **斜杠命令菜单**：运行时提供的可搜索命令菜单，命令结果可渲染。
 - **Goal 控制**：目标展示与编辑控制。
 - **文件审查**：对模型改动提供 keep / revert 操作。
@@ -43,9 +45,12 @@ DeepSeek Harness 的 VS Code 客户端。它把 Harness Web 界面以紧凑的�
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="media/screenshot-chat.png" alt="Chat 视图"/><br/><b>Chat 视图</b><br/>流式对话、思考过程、工具调用展示</td>
-    <td align="center" width="33%"><img src="media/screenshot-settings.png" alt="Settings 视图"/><br/><b>Settings 视图</b><br/>配置 provider / model / API endpoint / 权限策略 / API Key</td>
-    <td align="center" width="33%"><img src="media/screenshot-trajectory.png" alt="Trajectory 视图"/><br/><b>Trajectory 视图</b><br/>按回合与步骤回放完整执行轨迹，支持导出</td>
+    <td align="center" width="50%"><img src="media/screenshot-chat-empty.png" alt="Chat 空状态"/><br/><b>Chat 视图</b><br/>欢迎空状态、模型选择与附件入口</td>
+    <td align="center" width="50%"><img src="media/screenshot-chat-thinking.png" alt="思考过程展示"/><br/><b>思考过程</b><br/>流式对话与可折叠的 Thought process 推理展示</td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="media/screenshot-plugins.png" alt="Plugins 视图"/><br/><b>Plugins 视图</b><br/>浏览运行时内嵌的 Harness 插件目录、激活状态与搜索筛选</td>
+    <td align="center" width="50%"><img src="media/screenshot-trajectory.png" alt="Trajectory 视图"/><br/><b>Trajectory 视图</b><br/>按回合与步骤回放完整执行轨迹，支持导出</td>
   </tr>
 </table>
 

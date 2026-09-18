@@ -17,7 +17,6 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished",
     "onView:deepseekHarness.chat"
   ],
   "main": "./dist/extension.cjs",
