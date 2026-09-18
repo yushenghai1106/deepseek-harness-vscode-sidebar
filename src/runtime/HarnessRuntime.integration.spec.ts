@@ -6,24 +6,20 @@ import { fileURLToPath } from 'node:url'
 import { HarnessClient } from '../harness/HarnessClient.ts'
 import { HarnessEventMapper } from '../harness/HarnessEventMapper.ts'
 
-// Locate the bundled runtime binary. Prefer the checked-in bin/ (source tree),
-// fall back to the installed extension location.
+// Locate the bundled native runtime in the source tree or an installed extension.
 const here = dirname(fileURLToPath(import.meta.url))
-const binary = process.platform === 'win32' ? 'dsh-py.exe' : 'dsh-py'
+const binary = process.platform === 'win32' ? 'dsh.exe' : 'dsh'
 const candidates = [
-  join(here, '..', '..', 'bin', 'dsh-py', binary),
-  join(here, '..', '..', 'bin', binary), // legacy one-file local runtime
-  join(homedir(), '.cursor', 'extensions', 'deepseek-harness.deepseek-harness-vscode-0.1.1', 'bin', 'dsh-py', binary),
-  join(homedir(), '.vscode', 'extensions', 'deepseek-harness.deepseek-harness-vscode-0.1.1', 'bin', 'dsh-py', binary),
-  join(homedir(), '.cursor', 'extensions', 'deepseek-harness.deepseek-harness-vscode-0.1.0', 'bin', 'dsh-py', binary),
-  join(homedir(), '.vscode', 'extensions', 'deepseek-harness.deepseek-harness-vscode-0.1.0', 'bin', 'dsh-py', binary),
+  join(here, '..', '..', 'bin', 'dsh', binary),
+  join(homedir(), '.cursor', 'extensions', 'deepseek-harness.deepseek-harness-vscode-0.1.1', 'bin', 'dsh', binary),
+  join(homedir(), '.vscode', 'extensions', 'deepseek-harness.deepseek-harness-vscode-0.1.1', 'bin', 'dsh', binary),
 ]
 
 const RUNTIME = candidates.find(existsSync)
 
-describe('HarnessRuntime integration (frozen dsh-py)', () => {
+describe('HarnessRuntime integration (bundled native dsh)', () => {
   beforeAll(() => {
-    if (RUNTIME === undefined) throw new Error('bundled dsh-py runtime binary not found; build it with pyinstaller first')
+    if (RUNTIME === undefined) throw new Error('bundled dsh runtime binary not found; build it with the release workflow first')
   })
 
   const cwd = process.cwd()
@@ -33,7 +29,7 @@ describe('HarnessRuntime integration (frozen dsh-py)', () => {
   function makeClient(): HarnessClient {
     return new HarnessClient({
       command: RUNTIME!,
-      args: ['sdk'],
+      args: ['--profile', 'sdk'],
       cwd,
       env: {
         ...process.env,

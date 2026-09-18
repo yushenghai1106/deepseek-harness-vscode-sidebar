@@ -2,12 +2,12 @@
   "name": "deepseek-harness-vscode",
   "displayName": "DeepSeek Harness",
   "description": "DeepSeek Harness coding agent for Visual Studio Code",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "publisher": "deepseek-harness",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/YSH-Forts/deepseek_harness.git"
+    "url": "https://github.com/yushenghai1106/deepseek-harness-vscode-sidebar.git"
   },
   "engines": {
     "vscode": "^1.96.0"

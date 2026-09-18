@@ -12,5 +12,4 @@ vitest.config.ts
 package-lock.json
 **/*.map
 **/*.ts
-bin/dsh-py/runtime/Python.framework/Resources
-bin/dsh-py/runtime/Python.framework/Versions/Current
+bin/dsh-py/**

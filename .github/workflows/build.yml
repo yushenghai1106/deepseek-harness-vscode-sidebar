@@ -7,10 +7,8 @@ on:
       - 'v*'
 
 env:
-  # The Python runtime source repository. PyInstaller cannot cross-compile, so
-  # each platform build checks out this repo and builds dsh-py natively.
-  PYTHON_REPO: https://github.com/deepseek-ai/deepseek-harness.git
-  PYTHON_REF: master
+  # Native dependencies are built on their target operating system and CPU.
+  HARNESS_REF: master
 
 jobs:
   build-runtime:
@@ -21,8 +19,11 @@ jobs:
       matrix:
         include:
           - target: darwin-arm64
-            os: macos-14
-            binary: dsh-py
+            os: macos-15
+            binary: dsh
+          - target: darwin-x64
+            os: macos-15-intel
+            binary: dsh
           - target: win32-x64
             os: windows-2025
             binary: dsh.exe
@@ -33,13 +34,13 @@ jobs:
             binary: dsh
     steps:
       - name: Checkout extension source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Checkout runtime source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: ${{ env.PYTHON_REF }}
+          ref: ${{ env.HARNESS_REF }}
           path: python-src
 
       - name: Set up pnpm
@@ -48,7 +49,7 @@ jobs:
           version: '11.7.0'
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: pnpm
@@ -68,6 +69,7 @@ jobs:
         run: |
           case "${{ matrix.target }}" in
             darwin-arm64) target=node24-macos-arm64; runtime=deepseek-harness-sdk-runtime-macos-arm64 ;;
+            darwin-x64) target=node24-macos-x64; runtime=deepseek-harness-sdk-runtime-macos-x64 ;;
             linux-x64) target=node24-linux-x64; runtime=deepseek-harness-sdk-runtime-linux-x64 ;;
             win32-x64) target=node24-win-x64; runtime=deepseek-harness-sdk-runtime-win-x64.exe ;;
           esac
@@ -79,7 +81,7 @@ jobs:
           else
             cp "dist-exe/$runtime" "$GITHUB_WORKSPACE/runtime-artifact/dsh/dsh"
             cp "dist-exe/$runtime-rg" "$GITHUB_WORKSPACE/runtime-artifact/dsh/dsh-rg"
-            if [ "${{ matrix.target }}" = "darwin-arm64" ]; then cp "dist-exe/$runtime-spawn-helper" "$GITHUB_WORKSPACE/runtime-artifact/dsh/dsh-spawn-helper"; fi
+            if [[ "${{ matrix.target }}" == darwin-* ]]; then cp "dist-exe/$runtime-spawn-helper" "$GITHUB_WORKSPACE/runtime-artifact/dsh/dsh-spawn-helper"; fi
             chmod +x "$GITHUB_WORKSPACE/runtime-artifact/dsh/"*
           fi
 
@@ -88,7 +90,7 @@ jobs:
         run: python scripts/smoke_runtime.py "runtime-artifact/dsh/${{ matrix.binary }}"
 
       - name: Upload runtime bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: runtime-${{ matrix.target }}
           path: runtime-artifact
@@ -103,19 +105,20 @@ jobs:
       matrix:
         include:
           - target: darwin-arm64
+          - target: darwin-x64
           - target: win32-x64
           - target: linux-x64
     steps:
       - name: Checkout extension source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Download target runtime bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: runtime-${{ matrix.target }}
           path: bin
@@ -129,13 +132,14 @@ jobs:
       - name: Read extension version
         id: extension-version
         shell: bash
-        run: echo "value=$(node -p \"require('./package.json').version\")" >> "$GITHUB_OUTPUT"
+        run: |
+          node -e "console.log('value=' + require('./package.json').version)" >> "$GITHUB_OUTPUT"
 
       - name: Package VSIX
         run: npx vsce package --target ${{ matrix.target }} --out deepseek-harness-vscode-${{ matrix.target }}-${{ steps.extension-version.outputs.value }}.vsix
 
       - name: Upload VSIX
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vsix-${{ matrix.target }}
           path: '*.vsix'
@@ -150,7 +154,7 @@ jobs:
       contents: write
     steps:
       - name: Download all VSIX artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-assets
           merge-multiple: true

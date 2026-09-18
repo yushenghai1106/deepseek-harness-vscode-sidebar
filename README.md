@@ -1,8 +1,8 @@
 # DeepSeek Harness VS Code
 
-DeepSeek Harness 的 VS Code 客户端。它把 Harness Web 界面以紧凑的形式搬进 VS Code 侧边栏，同时把「智能体循环、工具调用、沙箱、模型访问、凭据和持久化」这些核心能力完整保留在 Python 运行时 `dsh-py` 中。
+DeepSeek Harness 的 VS Code 客户端。它把 Harness Web 界面以紧凑的形式搬进 VS Code 侧边栏，同时把「智能体循环、工具调用、沙箱、模型访问、凭据和持久化」这些核心能力完整保留在原生 `dsh` 运行时中。
 
-扩展自身只负责：编辑器上下文采集、会话选择、审批交互、以及结果展示。`dsh-py sdk` 才是 agent 循环、工具、持久化、模型访问和沙箱的唯一所有者。
+扩展自身只负责：编辑器上下文采集、会话选择、审批交互、以及结果展示。`dsh --profile sdk` 才是 agent 循环、工具、持久化、模型访问和沙箱的唯一所有者。
 
 ---
 
@@ -59,7 +59,7 @@ DeepSeek Harness 的 VS Code 客户端。它把 Harness Web 界面以紧凑的�
 ## 架构概览
 
 ```
-Developer ──> VS Code Webview ──> Extension Host ──> DeepSeek Harness Runtime (dsh-py)
+Developer ──> VS Code Webview ──> Extension Host ──> DeepSeek Harness Runtime (dsh)
 ```
 
 - **Webview（React）**：纯展示层与用户意图输入，无 Node.js 能力。
@@ -103,7 +103,7 @@ Developer ──> VS Code Webview ──> Extension Host ──> DeepSeek Harnes
 | Windows x64 | `win32-x64` |
 | Linux x64 | `linux-x64` |
 
-> 每个平台都内嵌对应架构的 PyInstaller `dsh-py` 运行时二进制。由于 PyInstaller 无法交叉编译，各平台二进制通过 GitHub Actions 在对应系统上自动构建（见 [.github/workflows/build.yml](.github/workflows/build.yml)）。
+> 每个平台都内嵌对应架构的原生 `dsh` 运行时及其辅助程序。GitHub Actions 在对应系统和 CPU 架构上构建各平台产物（见 [.github/workflows/build.yml](.github/workflows/build.yml)）。
 
 ---
 
@@ -118,7 +118,7 @@ npm run build       # 构建扩展 + Webview
 
 然后在 VS Code 中打开本目录，按 `F5` 启动 Extension Development Host 调试扩展。
 
-> 如果 `dsh-py` 不在 `PATH` 上，可在 VS Code 设置中配置 `deepseekHarness.runtime.command`。对于本地开发，通常指向 `../deepseek-harness-python/.venv/bin/dsh-py`。
+> 可在 VS Code 设置中配置 `deepseekHarness.runtime.command`，使用自行构建的 `dsh` 运行时替代扩展内置版本。
 
 ### 常用脚本
 
@@ -140,9 +140,9 @@ npm run build       # 构建扩展 + Webview
 
 ### 方式一：GitHub Actions 自动构建（推荐）
 
-推送 `v*` 标签（或手动触发 workflow）后，[`.github/workflows/build.yml`](.github/workflows/build.yml) 会在四个系统上分别构建对应架构的 `dsh-py` 二进制，并打包出四个平台的 VSIX。推送 tag 时还会自动创建 GitHub Release 并上传全部产物。
+推送 `v*` 标签（或手动触发 workflow）后，[`.github/workflows/build.yml`](.github/workflows/build.yml) 会在四个目标 runner 上分别构建对应架构的原生 `dsh` 运行时，并打包出四个平台的 VSIX。推送 tag 时还会自动创建 GitHub Release 并上传全部产物。
 
-由于 PyInstaller 无法交叉编译，**Windows / Linux / macOS Intel 的二进制必须在对应系统上构建**，因此推荐使用 CI 完成多平台打包。
+原生依赖必须在对应系统和 CPU 架构上构建，因此推荐使用 CI 完成多平台打包。
 
 ### 方式二：本地打包当前平台
 
@@ -159,7 +159,7 @@ npm run package:darwin-arm64   # 或 darwin-x64 / win32-x64 / linux-x64
 
 ### 方式一：从 GitHub Release 下载（推荐）
 
-1. 前往 [Releases 页面](https://github.com/YSH-Forts/deepseek-harness-vscode-sidebar/releases)，按你的系统下载对应平台的 `.vsix` 文件：
+1. 前往 [Releases 页面](https://github.com/yushenghai1106/deepseek-harness-vscode-sidebar/releases)，按你的系统下载对应平台的 `.vsix` 文件：
    - macOS Apple Silicon：`deepseek-harness-vscode-darwin-arm64-*.vsix`
    - macOS Intel：`deepseek-harness-vscode-darwin-x64-*.vsix`
    - Windows x64：`deepseek-harness-vscode-win32-x64-*.vsix`
