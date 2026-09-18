@@ -30,7 +30,7 @@ const MODE_OPTIONS = [
   { value: 'creator', label: 'Creator', description: 'Cordis plugin authoring setup' },
 ]
 const EMPTY: WebviewState = {
-  runtime: { state: 'stopped' }, sessions: [], commands: [], events: [], historyLoading: true, trajectoryEvents: [], plugins: [], attachedFiles: [],
+  runtime: { state: 'stopped' }, sessions: [], commands: [], events: [], historyLoading: true, historyHasMore: false, historyLoadingMore: false, trajectoryEvents: [], plugins: [], attachedFiles: [],
   settings: { provider: 'deepseek-official', model: 'deepseek-v4-flash', endpoint: '', permissionMode: 'workspace-write', credential: { configured: false, writable: true }, loading: true }, gitChanges: [],
 }
 
@@ -87,6 +87,7 @@ export function App(): JSX.Element {
     const changed = new Map<string, Extract<HarnessEvent, { type: 'file.changed' }>>()
     for (let index = events.length - 1; index >= 0; index--) {
       const event = events[index]
+      if (event === undefined) continue
       if (!runningChecked && event.type === 'status.changed') { running = event.status === 'running'; runningChecked = true }
       if (latestUsage === undefined && event.type === 'context.usage' && event.inputTokens > 0) latestUsage = event
       if (runningChecked && latestUsage !== undefined) break
@@ -102,7 +103,7 @@ export function App(): JSX.Element {
   const selectedMode = MODE_OPTIONS.find(mode => mode.value === agentMode) ?? { value: 'standard', label: 'Standard', description: 'Full agent toolset' }
   const commandMatches = useMemo(() => {
     const match = /^\/(\S*)$/.exec(text)
-    if (match === null) return undefined
+    if (match === null || match[1] === undefined) return undefined
     const needle = match[1].toLowerCase()
     return state.commands.filter(command => command.name.toLowerCase().startsWith(needle)).slice(0, MAX_COMMAND_MATCHES)
   }, [text, state.commands])

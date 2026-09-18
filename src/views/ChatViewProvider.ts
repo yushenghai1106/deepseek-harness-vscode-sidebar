@@ -514,8 +514,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, vscode.Disp
     try {
       const page = await (await this.runtime.start()).history(id, { limit: HISTORY_PAGE_SIZE, before: this.historyAnchor })
       if (id !== this.activeSessionId) return
-      const seen = new Set(page.events.flatMap(event => event.eventSeq === undefined ? [] : [event.eventSeq]))
-      const retained = this.events.filter(event => event.eventSeq === undefined || !seen.has(event.eventSeq))
+      const seen = new Set(page.events.flatMap(event => 'eventSeq' in event && event.eventSeq !== undefined ? [event.eventSeq] : []))
+      const retained = this.events.filter(event => !('eventSeq' in event) || event.eventSeq === undefined || !seen.has(event.eventSeq))
       this.events = [...page.events, ...retained]
       this.historyHasMore = page.hasMore
       this.historyAnchor = page.firstSeq

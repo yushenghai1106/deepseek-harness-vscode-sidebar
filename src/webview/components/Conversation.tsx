@@ -190,10 +190,12 @@ class RowBuilder {
     const groupIndex = this.groups.get(callId), group = groupIndex === undefined ? undefined : this.rows[groupIndex]
     const toolIndex = group?.kind === 'toolGroup' ? group.tools.findIndex(tool => tool.callId === callId) : -1
     if (groupIndex === undefined || group === undefined || group.kind !== 'toolGroup' || toolIndex < 0) { this.tools.set(callId, { ...existing, ...patch }); return }
-    const tools = [...group.tools]
-    tools[toolIndex] = { ...tools[toolIndex], ...patch }
+    const tools = [...group.tools], current = tools[toolIndex]
+    if (current === undefined) { this.tools.set(callId, { ...existing, ...patch }); return }
+    const updated = { ...current, ...patch }
+    tools[toolIndex] = updated
     this.rows[groupIndex] = { key: group.key, kind: 'toolGroup', tools }
-    this.tools.set(callId, tools[toolIndex])
+    this.tools.set(callId, updated)
   }
 }
 
