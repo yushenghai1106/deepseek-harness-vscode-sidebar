@@ -129,6 +129,7 @@ npm run build       # 构建扩展 + Webview
 | `npm run build:extension` | 仅构建扩展（esbuild → `dist/extension.cjs`） |
 | `npm run build:webview` | 仅构建 Webview（Vite） |
 | `npm test` | 运行 Vitest 测试套件 |
+| `npm run runtime:sync` | 把本地运行时整理为扩展期望的 `bin/dsh` 布局（在 IDE 内打包时需先执行） |
 | `npm run package:darwin-arm64` | 构建并打包 `darwin-arm64` VSIX |
 | `npm run package:darwin-x64` | 构建并打包 `darwin-x64` VSIX |
 | `npm run package:win32-x64` | 构建并打包 `win32-x64` VSIX |
@@ -152,6 +153,8 @@ npm run package:darwin-arm64   # 或 darwin-x64 / win32-x64 / linux-x64
 ```
 
 > 本地打包只会在当前系统上产出对应平台的 VSIX。例如在 Apple Silicon Mac 上执行 `npm run package:darwin-arm64`，产物为 `deepseek-harness-vscode-darwin-arm64-<version>.vsix`，内嵌 PyInstaller 打包的 `arm64` 运行时可执行文件。要打包其他平台，请改用 CI 或到对应系统上执行。
+>
+> 扩展固定从 `<扩展目录>/bin/dsh/dsh` 启动运行时。若你手头只有本地构建的 `bin/dsh-py/`，先执行 `npm run runtime:sync` 把它整理成该布局；在 IDE 内直接运行 `vsce package`（不带 `--target`）时不会触发自动同步，同样需要先执行这一步。
 
 ---
 

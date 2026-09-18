@@ -81,7 +81,7 @@ interface PendingText { index: number; key: string }
  * Folds the append-only event log into presentational rows. Already emitted rows are reused across builds, so streaming one
  * more chunk replaces just the row it grows — every other row keeps its identity and its memoized subtree survives.
  */
-class RowBuilder {
+export class RowBuilder {
   private source: HarnessEvent[] = []
   private consumed = 0
   private rows: Row[] = []

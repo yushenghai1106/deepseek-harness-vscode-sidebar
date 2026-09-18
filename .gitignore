@@ -4,6 +4,9 @@ dist/
 .workbuddy/
 .DS_Store
 
+# Runtime bundles are build artifacts: the release workflow assembles bin/dsh per platform.
+bin/dsh/
+
 # Secrets & credentials - never commit
 .env
 .env.*

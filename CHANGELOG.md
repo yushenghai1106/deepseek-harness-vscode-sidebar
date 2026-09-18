@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Fixes the slash-command menu, which was rendered as always-empty because `commands/list` was never requested.
+- Streams long conversations incrementally: unchanged transcript rows keep their identity, so only the row being written re-renders.
+- Loads session history in pages of 200 with a "Load earlier messages" affordance instead of transferring the whole transcript.
+- Bounds file-change snapshots, persisted change records, and large or binary files no longer occupy memory.
+- Sends files created by the agent to the trash on revert instead of deleting them permanently.
+- Refreshes the changed-files list while the agent edits the workspace.
+- Adds `npm run runtime:sync` to normalize a local runtime bundle into the `bin/dsh` layout the extension expects.
+- Skips activation on startup so the extension only loads when the Chat view is opened.
+
 ## 0.1.4
 
 - Fixes VSIX version discovery in the release workflow.

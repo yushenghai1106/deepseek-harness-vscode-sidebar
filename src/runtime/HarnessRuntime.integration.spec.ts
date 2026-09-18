@@ -6,20 +6,28 @@ import { fileURLToPath } from 'node:url'
 import { HarnessClient } from '../harness/HarnessClient.ts'
 import { HarnessEventMapper } from '../harness/HarnessEventMapper.ts'
 
-// Locate the bundled native runtime in the source tree or an installed extension.
+// Locate the bundled native runtime: the packaged layout assembled by the release workflow, the
+// `dsh-py` launcher used by local builds, plus any installed extension from a previous release.
 const here = dirname(fileURLToPath(import.meta.url))
 const binary = process.platform === 'win32' ? 'dsh.exe' : 'dsh'
-const candidates = [
-  join(here, '..', '..', 'bin', 'dsh', binary),
-  join(homedir(), '.cursor', 'extensions', 'deepseek-harness.deepseek-harness-vscode-0.1.1', 'bin', 'dsh', binary),
-  join(homedir(), '.vscode', 'extensions', 'deepseek-harness.deepseek-harness-vscode-0.1.1', 'bin', 'dsh', binary),
+const localLauncher = process.platform === 'win32' ? 'dsh-py.exe' : 'dsh-py'
+const candidates: { executable: string; args: string[] }[] = [
+  { executable: join(here, '..', '..', 'bin', 'dsh-py', localLauncher), args: ['sdk'] },
+  { executable: join(here, '..', '..', 'bin', 'dsh', binary), args: ['--profile', 'sdk'] },
+  ...['0.1.1', '0.1.4'].flatMap(version => ['.cursor', '.vscode'].map(client => ({
+    executable: join(homedir(), client, 'extensions', `deepseek-harness.deepseek-harness-vscode-${version}`, 'bin', 'dsh', binary),
+    args: ['--profile', 'sdk'],
+  }))),
 ]
 
-const RUNTIME = candidates.find(existsSync)
+// The release workflow builds a native runtime that takes `--profile sdk`; the Python launcher
+// used for local builds takes `sdk` as a subcommand instead. Each candidate carries its own
+// launch arguments rather than inferring the shape from the path.
+const RUNTIME = candidates.find(candidate => existsSync(candidate.executable))
 
 describe('HarnessRuntime integration (bundled native dsh)', () => {
   beforeAll(() => {
-    if (RUNTIME === undefined) throw new Error('bundled dsh runtime binary not found; build it with the release workflow first')
+    if (RUNTIME === undefined) throw new Error(`bundled runtime binary not found; run \`npm run runtime:sync\` or build it with the release workflow first. Checked:\n${candidates.map(candidate => `  - ${candidate.executable}`).join('\n')}`)
   })
 
   const cwd = process.cwd()
@@ -28,8 +36,8 @@ describe('HarnessRuntime integration (bundled native dsh)', () => {
 
   function makeClient(): HarnessClient {
     return new HarnessClient({
-      command: RUNTIME!,
-      args: ['--profile', 'sdk'],
+      command: RUNTIME!.executable,
+      args: RUNTIME!.args,
       cwd,
       env: {
         ...process.env,
@@ -122,6 +130,32 @@ describe('HarnessRuntime integration (bundled native dsh)', () => {
       await client.close()
     }
   }, 25_000)
+
+  it('exposes the slash-command catalog the composer menu renders', async () => {
+    const client = makeClient()
+    try {
+      await client.initialize({ cwd, provider: 'deepseek-official', model: 'deepseek-chat' })
+      const commands = await client.listCommands()
+      expect(commands.length).toBeGreaterThan(0)
+      expect(commands.every(command => typeof command.name === 'string' && command.name !== '')).toBe(true)
+    } finally {
+      await client.close()
+    }
+  }, 30_000)
+
+  it('reports history paging metadata so older turns can be fetched lazily', async () => {
+    const client = makeClient()
+    try {
+      await client.initialize({ cwd, provider: 'deepseek-official', model: 'deepseek-chat' })
+      const sessionId = `vitest-page-${Date.now()}`
+      await client.prompt(sessionId, [{ type: 'text', text: 'ping' }])
+      const page = await client.history(sessionId, { limit: 1 })
+      expect(page.events.length).toBeLessThanOrEqual(1)
+      expect(typeof page.hasMore).toBe('boolean')
+    } finally {
+      await client.close()
+    }
+  }, 30_000)
 
   it.skipIf(process.env.DSH_E2E_API_KEY === undefined)('streams assistant chunks and completes a turn end-to-end', async () => {
     const client = makeClient()

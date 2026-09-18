@@ -15,6 +15,12 @@ import time
 from pathlib import Path
 
 
+def launch_args(executable: Path) -> list[str]:
+    """The release workflow builds a native runtime taking `--profile sdk`; the Python
+    launcher used for local builds takes `sdk` as a subcommand instead."""
+    return ["sdk"] if executable.name.startswith("dsh-py") else ["--profile", "sdk"]
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: smoke_runtime.py /path/to/dsh[.exe]")
@@ -31,7 +37,7 @@ def main() -> int:
         "DSH_SESSION_COMPRESSION": "none",
     }
     process = subprocess.Popen(
-        [str(executable), "--profile", "sdk"],
+        [str(executable), *launch_args(executable)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

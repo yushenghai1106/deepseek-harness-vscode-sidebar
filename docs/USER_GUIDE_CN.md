@@ -64,6 +64,8 @@ npm run build
 npm run package:darwin-arm64   # 按当前平台替换
 ```
 
+> 在 IDE 内打包时（不经过 `--target` 脚本）需先执行 `npm run runtime:sync`，把运行时整理为扩展期望的 `bin/dsh/dsh` 布局。
+
 本地打包只生成当前系统对应的 VSIX。其他平台需要在对应系统构建，或使用 GitHub Actions。
 
 ## 五、首次配置 API Key
